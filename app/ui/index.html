@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orion猎户座</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <h1>Orion猎户座</h1>
+          <p>以配置驱动构建与部署，实时掌握系统构建状态</p>
+        </div>
+        <div class="topbar-meta">
+          <span id="apiBaseHint">API: /api</span>
+          <button id="refreshAllBtn" class="ghost-btn" type="button">刷新数据</button>
+        </div>
+      </header>
+
+      <section class="hero-banner">
+        <div class="hero-main">
+          <p class="hero-eyebrow">Orion Control Plane</p>
+          <h2>以配置驱动构建与部署，实时掌握系统构建状态</h2>
+          <p class="hero-desc">统一查看应用、环境、构建、部署与预检查结果，帮助你在发布前快速发现风险。</p>
+        </div>
+        <div class="hero-stats">
+          <article class="hero-stat">
+            <span>任务总量</span>
+            <strong id="heroTotalTasks">0</strong>
+          </article>
+          <article class="hero-stat">
+            <span>构建成功率</span>
+            <strong id="heroBuildSuccessRate">0%</strong>
+          </article>
+          <article class="hero-stat">
+            <span>部署成功率</span>
+            <strong id="heroDeploySuccessRate">0%</strong>
+          </article>
+          <article class="hero-stat">
+            <span>最后刷新</span>
+            <strong id="heroLastRefresh">--</strong>
+          </article>
+        </div>
+      </section>
+
+      <div class="layout">
+        <aside class="sidebar">
+          <button class="nav-btn active" data-view="dashboard" type="button">环境预检</button>
+          <button class="nav-btn" data-view="apps" type="button">应用管理</button>
+          <button class="nav-btn" data-view="environments" type="button">环境管理</button>
+          <button class="nav-btn" data-view="builds" type="button">构建中心</button>
+          <button class="nav-btn" data-view="images" type="button">镜像仓库</button>
+          <button class="nav-btn" data-view="deployments" type="button">部署中心</button>
+        </aside>
+
+        <main class="main">
+          <section class="view active" id="view-dashboard">
+            <div class="view-head">
+              <h2>环境预检</h2>
+              <p>当前系统运行态、任务统计、预检查健康度与关键明细。</p>
+            </div>
+
+            <div class="metrics-grid">
+              <article class="card metric-card">
+                <h3>应用总数</h3>
+                <p class="metric-value" id="metricApps">0</p>
+                <p class="metric-sub">已注册的发布应用</p>
+              </article>
+              <article class="card metric-card">
+                <h3>环境总数</h3>
+                <p class="metric-value" id="metricEnvs">0</p>
+                <p class="metric-sub">可用远程目标环境</p>
+              </article>
+              <article class="card metric-card">
+                <h3>构建任务总数</h3>
+                <p class="metric-value" id="metricBuilds">0</p>
+                <p class="metric-sub" id="metricBuildSuccessRate">成功率 0%</p>
+              </article>
+              <article class="card metric-card">
+                <h3>部署任务总数</h3>
+                <p class="metric-value" id="metricDeploys">0</p>
+                <p class="metric-sub" id="metricDeploySuccessRate">成功率 0%</p>
+              </article>
+              <article class="card metric-card">
+                <h3>待处理任务</h3>
+                <p class="metric-value" id="metricPendingTasks">0</p>
+                <p class="metric-sub">queued + running</p>
+              </article>
+              <article class="card metric-card">
+                <h3>最近活动时间</h3>
+                <p class="metric-value compact" id="metricLastActivity">--</p>
+                <p class="metric-sub">最近构建或部署记录</p>
+              </article>
+              <article class="card metric-card">
+                <h3>构建配置数量</h3>
+                <p class="metric-value" id="metricBuildConfigCount">0</p>
+                <p class="metric-sub">可复用构建模板</p>
+              </article>
+              <article class="card metric-card">
+                <h3>部署配置数量</h3>
+                <p class="metric-value" id="metricDeployConfigCount">0</p>
+                <p class="metric-sub">可复用部署模板</p>
+              </article>
+            </div>
+
+            <div class="grid-two">
+              <article class="card">
+                <h3>任务状态分布</h3>
+                <div class="status-group">
+                  <h4>构建任务</h4>
+                  <div id="dashboardBuildStatusChips" class="status-chips">
+                    <span class="status-chip">暂无数据</span>
+                  </div>
+                </div>
+                <div class="status-group">
+                  <h4>部署任务</h4>
+                  <div id="dashboardDeployStatusChips" class="status-chips">
+                    <span class="status-chip">暂无数据</span>
+                  </div>
+                </div>
+              </article>
+
+              <article class="card">
+                <h3>最近任务明细</h3>
+                <div class="recent-block">
+                  <h4>最近构建</h4>
+                  <p id="dashboardRecentBuild" class="recent-text">暂无构建记录</p>
+                </div>
+                <div class="recent-block">
+                  <h4>最近部署</h4>
+                  <p id="dashboardRecentDeploy" class="recent-text">暂无部署记录</p>
+                </div>
+              </article>
+            </div>
+
+            <div class="grid-two precheck-zone">
+              <article class="card">
+                <h3>本地预检查</h3>
+                <div class="precheck-toolbar">
+                  <div class="precheck-summary">
+                    <span id="localPrecheckStatusBadge" class="precheck-badge pending">未执行</span>
+                    <span id="localPrecheckSummaryText" class="precheck-summary-text">点击按钮开始检查</span>
+                  </div>
+                  <button id="runLocalPrecheckBtn" class="primary-btn" type="button">执行本地预检查</button>
+                </div>
+                <div id="localPrecheckItems" class="precheck-items">
+                  <article class="check-item muted">
+                    <h4>等待执行</h4>
+                    <p>执行后会展示每一项检查结果。</p>
+                  </article>
+                </div>
+                <h4 class="output-title">原始检查输出</h4>
+                <pre id="localPrecheckOut" class="mono output">尚未执行</pre>
+              </article>
+
+              <article class="card">
+                <h3>远程预检查</h3>
+                <div class="precheck-toolbar">
+                  <div class="precheck-summary">
+                    <span id="remotePrecheckStatusBadge" class="precheck-badge pending">未执行</span>
+                    <span id="remotePrecheckSummaryText" class="precheck-summary-text">选择环境后执行检查</span>
+                  </div>
+                  <div class="precheck-action">
+                    <label for="remoteEnvSelect" class="precheck-inline-label">目标环境</label>
+                    <select id="remoteEnvSelect" class="precheck-env-select"></select>
+                    <button id="runRemotePrecheckBtn" class="primary-btn" type="button">执行远程预检查</button>
+                  </div>
+                </div>
+                <div id="remotePrecheckItems" class="precheck-items">
+                  <article class="check-item muted">
+                    <h4>等待执行</h4>
+                    <p>执行后会展示 SSH、Docker、磁盘等检查项。</p>
+                  </article>
+                </div>
+                <h4 class="output-title">原始检查输出</h4>
+                <pre id="remotePrecheckOut" class="mono output">尚未执行</pre>
+              </article>
+            </div>
+          </section>
+
+          <section class="view" id="view-apps">
+            <div class="view-head">
+              <h2>应用管理</h2>
+            </div>
+            <article class="card">
+              <h3>新建应用</h3>
+              <form id="appForm" class="form-grid">
+                <label>应用名称<input id="appNameInput" required /></label>
+                <label>描述<input id="appDescInput" /></label>
+                <button class="primary-btn" type="submit">创建应用</button>
+              </form>
+            </article>
+            <article class="card">
+              <h3>应用列表</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>名称</th>
+                      <th>描述</th>
+                      <th>创建时间</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="appsTableBody"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+
+          <section class="view" id="view-environments">
+            <div class="view-head">
+              <h2>环境管理</h2>
+            </div>
+            <article class="card">
+              <h3>新建环境</h3>
+              <form id="envForm" class="form-grid">
+                <label>环境名称<input id="envNameInput" required /></label>
+                <label>Host<input id="envHostInput" required placeholder="10.0.0.12" /></label>
+                <label>Port<input id="envPortInput" type="number" value="22" required /></label>
+                <label>用户名<input id="envUserInput" required /></label>
+                <label>密码<input id="envPasswordInput" type="password" required /></label>
+                <button id="envTestBtn" class="ghost-btn" type="button">测试连接</button>
+                <button class="primary-btn" type="submit">创建环境</button>
+              </form>
+              <pre id="envTestOut" class="mono output">尚未测试连接</pre>
+            </article>
+            <article class="card">
+              <h3>环境列表</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>名称</th>
+                      <th>Host</th>
+                      <th>Port</th>
+                      <th>User</th>
+                      <th>认证方式</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="envTableBody"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+
+          <section class="view" id="view-builds">
+            <div class="view-head">
+              <h2>构建中心</h2>
+            </div>
+            <div class="grid-two">
+              <article class="card">
+                <h3>发起构建 / 配置保存</h3>
+                <form id="buildForm" class="form-grid">
+                  <label>配置名称（保存配置时必填）
+                    <input id="buildConfigNameInput" placeholder="例如 backend-prod" />
+                  </label>
+                  <label>当前配置ID
+                    <input id="buildConfigIdInput" readonly placeholder="未选择" />
+                  </label>
+                  <label>应用
+                    <select id="buildAppSelect" required></select>
+                  </label>
+                  <label>镜像 Tag
+                    <input id="buildTagInput" required placeholder="orion/demo:latest" />
+                  </label>
+                  <label>构建上下文（可选）
+                    <input id="buildContextInput" placeholder="默认 workspace/{app}" />
+                  </label>
+                  <label>Build Args（每行 KEY=VALUE，可选）
+                    <textarea id="buildArgsInput" rows="5"></textarea>
+                  </label>
+                  <label>在线 Dockerfile（可选）
+                    <textarea id="dockerfileInput" rows="8" placeholder="留空则使用上下文中的 Dockerfile"></textarea>
+                  </label>
+                  <label>构建超时秒数（可选）
+                    <input id="buildTimeoutInput" type="number" min="60" max="7200" placeholder="1800" />
+                  </label>
+                  <div class="action-row form-full">
+                    <button class="primary-btn" type="submit">提交构建</button>
+                    <button id="saveBuildConfigBtn" class="ghost-btn" type="button">保存配置</button>
+                    <button id="updateBuildConfigBtn" class="ghost-btn" type="button">更新配置</button>
+                    <button id="clearBuildConfigSelectionBtn" class="ghost-btn" type="button">清空选择</button>
+                  </div>
+                </form>
+              </article>
+
+              <article class="card">
+                <h3>构建配置列表</h3>
+                <div class="inline-form">
+                  <button id="refreshBuildConfigsBtn" class="ghost-btn" type="button">刷新配置</button>
+                  <label for="selectedBuildConfigIdInput">已选配置ID</label>
+                  <input id="selectedBuildConfigIdInput" type="number" min="1" readonly />
+                  <button id="runBuildConfigBtn" class="primary-btn" type="button">使用配置构建</button>
+                  <button id="deleteBuildConfigBtn" class="ghost-btn" type="button">删除选中配置</button>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>名称</th>
+                        <th>App</th>
+                        <th>Tag</th>
+                        <th>更新时间</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="buildConfigsTableBody"></tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article class="card full-span">
+                <h3>构建任务</h3>
+                <div class="inline-form">
+                  <button id="refreshBuildsBtn" class="ghost-btn" type="button">刷新构建</button>
+                  <label for="selectedBuildIdInput">查看日志 Build ID</label>
+                  <input id="selectedBuildIdInput" type="number" min="1" />
+                  <button id="watchBuildBtn" class="primary-btn" type="button">查看日志</button>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>App</th>
+                        <th>Tag</th>
+                        <th>状态</th>
+                        <th>Digest</th>
+                      </tr>
+                    </thead>
+                    <tbody id="buildsTableBody"></tbody>
+                  </table>
+                </div>
+                <pre id="buildLogsOut" class="mono output tall">选择 Build ID 后查看日志</pre>
+              </article>
+            </div>
+          </section>
+
+          <section class="view" id="view-images">
+            <div class="view-head">
+              <h2>镜像仓库</h2>
+              <p>展示本地 Docker 镜像列表（按创建时间从新到旧），支持镜像直接部署到远程环境。</p>
+            </div>
+            <div class="grid-two">
+              <article class="card">
+                <h3>本地镜像列表</h3>
+                <div class="inline-form">
+                  <button id="refreshImageRepoBtn" class="ghost-btn" type="button">刷新镜像</button>
+                  <label for="imageRepoPageSizeSelect">每页</label>
+                  <select id="imageRepoPageSizeSelect" class="compact-select">
+                    <option value="10" selected>10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                  </select>
+                  <button id="imageRepoPrevBtn" class="ghost-btn" type="button">上一页</button>
+                  <button id="imageRepoNextBtn" class="ghost-btn" type="button">下一页</button>
+                  <span id="imageRepoPageInfo" class="inline-hint">第 1/0 页 · 0 条</span>
+                  <label for="selectedImageRefInput">已选镜像</label>
+                  <input id="selectedImageRefInput" readonly placeholder="请从列表选择镜像" />
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Repository</th>
+                        <th>Tag</th>
+                        <th>Image ID</th>
+                        <th>Digest</th>
+                        <th>创建时间</th>
+                        <th>大小</th>
+                      </tr>
+                    </thead>
+                    <tbody id="imageRepoTableBody"></tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article class="card">
+                <h3>镜像部署</h3>
+                <form id="imageDeployForm" class="form-grid">
+                  <label>应用
+                    <select id="imageDeployAppSelect" required></select>
+                  </label>
+                  <label>环境
+                    <select id="imageDeployEnvSelect" required></select>
+                  </label>
+                  <label>模式
+                    <select id="imageDeployModeSelect">
+                      <option value="run">run</option>
+                      <option value="compose">compose</option>
+                    </select>
+                  </label>
+                  <label>容器名（run 模式）
+                    <input id="imageDeployContainerNameInput" value="app-prod" />
+                  </label>
+                  <label>端口映射（run，每行 8080:80）
+                    <textarea id="imageDeployPortsInput" rows="4"></textarea>
+                  </label>
+                  <label>环境变量（run，每行 KEY=VALUE）
+                    <textarea id="imageDeployEnvVarsInput" rows="4"></textarea>
+                  </label>
+                  <label>Compose 内容（compose 可选）
+                    <textarea id="imageDeployComposeInput" rows="8"></textarea>
+                  </label>
+                  <label>远程目录（compose 可选）
+                    <input id="imageDeployRemoteDirInput" placeholder="/opt/orion/app/prod" />
+                  </label>
+                  <label>部署超时秒数（可选）
+                    <input id="imageDeployTimeoutInput" type="number" min="60" max="7200" placeholder="1800" />
+                  </label>
+                  <div class="action-row form-full">
+                    <button id="submitImageDeployBtn" class="primary-btn" type="submit">预检通过后部署</button>
+                  </div>
+                </form>
+                <h4 class="output-title">预检结果</h4>
+                <pre id="imageDeployPrecheckOut" class="mono output">尚未执行</pre>
+                <h4 class="output-title">部署详情</h4>
+                <pre id="imageDeployDetailOut" class="mono output">尚未部署</pre>
+                <h4 class="output-title">部署日志</h4>
+                <pre id="imageDeployLogsOut" class="mono output tall">尚未部署</pre>
+              </article>
+            </div>
+          </section>
+
+          <section class="view" id="view-deployments">
+            <div class="view-head">
+              <h2>部署中心</h2>
+            </div>
+            <div class="grid-two">
+              <article class="card">
+                <h3>部署参数配置</h3>
+                <form id="deployForm" class="form-grid">
+                  <label>部署配置名称（保存配置时必填）
+                    <input id="deployConfigNameInput" placeholder="例如 prod-run-main" />
+                  </label>
+                  <label>当前配置ID
+                    <input id="deployConfigIdInput" readonly placeholder="未选择" />
+                  </label>
+                  <label>应用
+                    <select id="deployAppSelect" required></select>
+                  </label>
+                  <label>环境
+                    <select id="deployEnvSelect" required></select>
+                  </label>
+                  <label>模式
+                    <select id="deployModeSelect">
+                      <option value="run">run</option>
+                      <option value="compose">compose</option>
+                    </select>
+                  </label>
+                  <label>Build ID（优先）
+                    <input id="deployBuildIdInput" type="number" min="1" placeholder="例如 12" />
+                  </label>
+                  <label>镜像引用（可选）
+                    <input id="deployImageRefInput" placeholder="image:tag 或 image@sha256:xxx" />
+                  </label>
+                  <label>容器名（run 模式）
+                    <input id="deployContainerNameInput" value="app-prod" />
+                  </label>
+                  <label>端口映射（run，每行 8080:80）
+                    <textarea id="deployPortsInput" rows="4"></textarea>
+                  </label>
+                  <label>环境变量（run，每行 KEY=VALUE）
+                    <textarea id="deployEnvVarsInput" rows="4"></textarea>
+                  </label>
+                  <label>Compose 内容（compose 可选）
+                    <textarea id="deployComposeInput" rows="8"></textarea>
+                  </label>
+                  <label>远程目录（compose 可选）
+                    <input id="deployRemoteDirInput" placeholder="/opt/orion/app/prod" />
+                  </label>
+                  <label>部署超时秒数（可选）
+                    <input id="deployTimeoutInput" type="number" min="60" max="7200" placeholder="1800" />
+                  </label>
+                  <div class="action-row form-full">
+                    <button class="primary-btn" type="submit">提交部署</button>
+                    <button id="saveDeployConfigBtn" class="ghost-btn" type="button">保存配置</button>
+                    <button id="updateDeployConfigBtn" class="ghost-btn" type="button">更新配置</button>
+                    <button id="clearDeployConfigSelectionBtn" class="ghost-btn" type="button">清空选择</button>
+                  </div>
+                </form>
+              </article>
+
+              <article class="card">
+                <h3>部署配置与历史任务</h3>
+                <div class="inline-form">
+                  <button id="refreshDeployConfigsBtn" class="ghost-btn" type="button">刷新配置</button>
+                  <label for="deployConfigSelect">已保存部署配置</label>
+                  <select id="deployConfigSelect"></select>
+                  <button id="loadDeployConfigBtn" class="ghost-btn" type="button">加载到表单</button>
+                  <button id="deleteDeployConfigBtn" class="ghost-btn" type="button">删除选中配置</button>
+                </div>
+                <div class="inline-form">
+                  <button id="refreshDeploysBtn" class="ghost-btn" type="button">刷新部署</button>
+                  <label for="selectedDeployIdInput">已选 Deploy ID</label>
+                  <input id="selectedDeployIdInput" type="number" min="1" />
+                  <button id="viewDeployDetailBtn" class="ghost-btn" type="button">查看详情</button>
+                  <button id="watchDeployBtn" class="primary-btn" type="button">查看日志</button>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>应用</th>
+                        <th>环境</th>
+                        <th>模式</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="deploysTableBody"></tbody>
+                  </table>
+                </div>
+                <pre id="deployDetailOut" class="mono output">选择 Deploy ID 后查看详情</pre>
+                <pre id="deployLogsOut" class="mono output tall">选择 Deploy ID 后查看日志</pre>
+              </article>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>
