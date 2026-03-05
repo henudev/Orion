@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.timezone import now_orion_naive
 from app.db.base import Base
 
 
@@ -19,6 +20,6 @@ class Environment(Base):
     password: Mapped[str] = mapped_column(String(512), nullable=False)
     # Backward compatible field for older schema; no longer used in new auth flow.
     ssh_key_path: Mapped[str] = mapped_column(String(512), nullable=False, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_orion_naive, nullable=False)
 
     deployments = relationship("Deployment", back_populates="environment")

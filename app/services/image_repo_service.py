@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.timezone import to_orion
 from app.services.command_runner import run_simple_command
 
 
@@ -131,10 +132,8 @@ async def list_local_images(limit: int | None = None) -> list[dict[str, Any]]:
         )
 
     def _sort_key(item: dict[str, Any]) -> datetime:
-        dt = item.get("created_at")
-        if isinstance(dt, datetime):
-            if dt.tzinfo is None:
-                return dt.replace(tzinfo=timezone.utc)
+        dt = to_orion(item.get("created_at") if isinstance(item.get("created_at"), datetime) else None)
+        if dt is not None:
             return dt.astimezone(timezone.utc)
         return datetime(1970, 1, 1, tzinfo=timezone.utc)
 
@@ -150,3 +149,21 @@ async def ensure_local_image_exists(image_ref: str) -> None:
     code, out = await run_simple_command(["docker", "image", "inspect", image_ref], timeout_seconds=20)
     if code != 0:
         raise RuntimeError(out or f"image not found: {image_ref}")
+
+
+async def delete_local_image(image_ref: str, force: bool = False) -> str:
+    image_ref_value = image_ref.strip()
+    if not image_ref_value:
+        raise RuntimeError("image_ref cannot be empty")
+
+    command = ["docker", "image", "rm"]
+    if force:
+        command.append("--force")
+    command.append(image_ref_value)
+
+    code, out = await run_simple_command(command, timeout_seconds=60)
+    if code != 0:
+        message = out or f"docker image rm failed: {image_ref_value}"
+        raise RuntimeError(message)
+
+    return out or f"image removed: {image_ref_value}"

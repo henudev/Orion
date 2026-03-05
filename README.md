@@ -323,6 +323,20 @@ docker save image_ref -> ssh remote docker load
 - `DELETE /api/build-configs/{id}`
 - `POST /api/build-configs/{id}/run`
 
+### 10.2.1 AI 快速构建
+
+- `GET /api/model-configs`
+- `POST /api/model-configs`
+- `GET /api/model-configs/{id}`
+- `PUT /api/model-configs/{id}`
+- `DELETE /api/model-configs/{id}`
+- `POST /api/model-configs/{id}/test-connection`
+- `POST /api/ai/generate-dockerfile`
+  - 输入：`model_config_id` + `requirement`
+  - 输出：`dockerfile_content`
+  - provider 兼容：`openai`、`ollama`
+  - `ollama` 支持两种接口格式：`/api/chat`（原生）与 `/v1/chat/completions`（OpenAI 兼容）
+
 ### 10.3 部署
 
 - `POST /api/deploy`

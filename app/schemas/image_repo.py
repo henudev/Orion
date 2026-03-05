@@ -28,6 +28,17 @@ class ImageRepositoryListResponse(BaseModel):
     total_pages: int
 
 
+class ImageDeleteRequest(BaseModel):
+    image_ref: str = Field(description="要删除的本地镜像引用")
+    force: bool = Field(default=False, description="是否强制删除")
+
+
+class ImageDeleteResponse(BaseModel):
+    ok: bool
+    image_ref: str
+    detail: str
+
+
 class ImageDeployCreate(BaseModel):
     app_id: int
     environment_id: int

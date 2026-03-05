@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Orion猎户座</title>
-    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260303" />
   </head>
   <body>
     <div class="shell">
@@ -14,7 +14,6 @@
           <p>以配置驱动构建与部署，实时掌握系统构建状态</p>
         </div>
         <div class="topbar-meta">
-          <span id="apiBaseHint">API: /api</span>
           <button id="refreshAllBtn" class="ghost-btn" type="button">刷新数据</button>
         </div>
       </header>
@@ -249,12 +248,106 @@
             </article>
           </section>
 
-          <section class="view" id="view-builds">
+          <section class="view build-mode-manual" id="view-builds">
             <div class="view-head">
               <h2>构建中心</h2>
             </div>
+            <div class="build-tabs">
+              <button class="build-tab-btn active" data-build-mode="manual" type="button">手动构建</button>
+              <button class="build-tab-btn" data-build-mode="ai" type="button">AI 快速构建</button>
+            </div>
             <div class="grid-two">
-              <article class="card">
+              <article class="card full-span build-ai-only" hidden>
+                <h3>AI 快速构建</h3>
+                <p class="section-desc">输入构建要求，模型自动生成 Dockerfile，可一键回填到构建表单。</p>
+                <div class="grid-two ai-build-grid">
+                  <div>
+                    <form id="aiDockerfileForm" class="form-grid">
+                      <label>模型配置
+                        <select id="aiModelConfigSelect" required></select>
+                      </label>
+                      <label class="form-full">构建要求
+                        <textarea id="aiRequirementInput" rows="8" placeholder="例如：Python 3.11 + FastAPI，使用 poetry，监听 8000，生产环境镜像尽量小" required></textarea>
+                      </label>
+                      <div class="action-row form-full">
+                        <button id="generateDockerfileBtn" class="primary-btn" type="submit">生成 Dockerfile</button>
+                        <button id="stopGenerateDockerfileBtn" class="ghost-btn" type="button" disabled>停止生成</button>
+                        <button id="applyGeneratedDockerfileBtn" class="ghost-btn" type="button">回填到构建表单</button>
+                      </div>
+                    </form>
+                    <h4 class="output-title">生成结果</h4>
+                    <pre id="aiDockerfileOut" class="mono output tall">尚未生成</pre>
+                  </div>
+
+                  <div>
+                    <h4 class="subsection-title">模型配置</h4>
+                    <form id="modelConfigForm" class="form-grid">
+                      <label>当前配置ID
+                        <input id="modelConfigIdInput" readonly placeholder="未选择" />
+                      </label>
+                      <label>配置名称
+                        <input id="modelConfigNameInput" placeholder="例如 openai-gpt-4o-mini" />
+                      </label>
+                      <label>Provider
+                        <select id="modelProviderSelect">
+                          <option value="openai">openai</option>
+                          <option value="ollama">ollama</option>
+                        </select>
+                      </label>
+                      <label>Base URL
+                        <input id="modelBaseUrlInput" placeholder="OpenAI: .../v1 ；Ollama: http://127.0.0.1:11434 或 OpenAI兼容 .../v1" />
+                      </label>
+                      <label>Model
+                        <input id="modelNameInput" placeholder="gpt-4o-mini 或 qwen2.5:latest" />
+                      </label>
+                      <label>API Key（OpenAI 常用）
+                        <input id="modelApiKeyInput" type="password" placeholder="留空则不更新" />
+                      </label>
+                      <label>Temperature（可选）
+                        <input id="modelTemperatureInput" type="number" min="0" max="2" step="0.1" placeholder="0.2" />
+                      </label>
+                      <label>Max Tokens（可选）
+                        <input id="modelMaxTokensInput" type="number" min="1" max="32768" placeholder="1200" />
+                      </label>
+                      <label class="checkbox-row">
+                        <input id="modelIsDefaultInput" type="checkbox" />
+                        设为默认配置
+                      </label>
+                      <label class="checkbox-row">
+                        <input id="clearModelApiKeyInput" type="checkbox" />
+                        更新时清空已保存 API Key
+                      </label>
+                      <div class="action-row form-full">
+                        <button id="createModelConfigBtn" class="primary-btn" type="button">保存配置</button>
+                        <button id="updateModelConfigBtn" class="ghost-btn" type="button">更新配置</button>
+                        <button id="testModelConfigBtn" class="ghost-btn" type="button">测试连接</button>
+                        <button id="clearModelConfigSelectionBtn" class="ghost-btn" type="button">清空选择</button>
+                      </div>
+                    </form>
+
+                    <div class="inline-form">
+                      <button id="refreshModelConfigsBtn" class="ghost-btn" type="button">刷新模型配置</button>
+                    </div>
+                    <div class="table-wrap">
+                      <table class="model-config-table">
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>名称</th>
+                            <th>Provider</th>
+                            <th>Model</th>
+                            <th>默认</th>
+                            <th>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody id="modelConfigsTableBody"></tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="card build-manual-only">
                 <h3>发起构建 / 配置保存</h3>
                 <form id="buildForm" class="form-grid">
                   <label>配置名称（保存配置时必填）
@@ -269,17 +362,25 @@
                   <label>镜像 Tag
                     <input id="buildTagInput" required placeholder="orion/demo:latest" />
                   </label>
-                  <label>构建上下文（可选）
-                    <input id="buildContextInput" placeholder="默认 workspace/{app}" />
-                  </label>
-                  <label>Build Args（每行 KEY=VALUE，可选）
-                    <textarea id="buildArgsInput" rows="5"></textarea>
-                  </label>
-                  <label>在线 Dockerfile（可选）
-                    <textarea id="dockerfileInput" rows="8" placeholder="留空则使用上下文中的 Dockerfile"></textarea>
-                  </label>
-                  <label>构建超时秒数（可选）
-                    <input id="buildTimeoutInput" type="number" min="60" max="7200" placeholder="1800" />
+                  <details id="buildOptionalPanel" class="fold-panel form-full">
+                    <summary>
+                      <span>可选构建参数</span>
+                      <small>上下文 / Build Args / 超时</small>
+                    </summary>
+                    <div class="fold-panel-body form-grid">
+                      <label>构建上下文（可选）
+                        <input id="buildContextInput" placeholder="默认 workspace/{app}" />
+                      </label>
+                      <label>构建超时秒数（可选）
+                        <input id="buildTimeoutInput" type="number" min="60" max="7200" placeholder="1800" />
+                      </label>
+                      <label class="form-full">Build Args（每行 KEY=VALUE，可选）
+                        <textarea id="buildArgsInput" rows="5"></textarea>
+                      </label>
+                    </div>
+                  </details>
+                  <label class="form-full">在线 Dockerfile
+                    <textarea id="dockerfileInput" rows="8" placeholder="可直接粘贴 Dockerfile；留空则使用上下文中的 Dockerfile"></textarea>
                   </label>
                   <div class="action-row form-full">
                     <button class="primary-btn" type="submit">提交构建</button>
@@ -290,7 +391,7 @@
                 </form>
               </article>
 
-              <article class="card">
+              <article class="card build-manual-only">
                 <h3>构建配置列表</h3>
                 <div class="inline-form">
                   <button id="refreshBuildConfigsBtn" class="ghost-btn" type="button">刷新配置</button>
@@ -316,7 +417,7 @@
                 </div>
               </article>
 
-              <article class="card full-span">
+              <article class="card full-span build-manual-only">
                 <h3>构建任务</h3>
                 <div class="inline-form">
                   <button id="refreshBuildsBtn" class="ghost-btn" type="button">刷新构建</button>
@@ -362,19 +463,22 @@
                   <button id="imageRepoPrevBtn" class="ghost-btn" type="button">上一页</button>
                   <button id="imageRepoNextBtn" class="ghost-btn" type="button">下一页</button>
                   <span id="imageRepoPageInfo" class="inline-hint">第 1/0 页 · 0 条</span>
-                  <label for="selectedImageRefInput">已选镜像</label>
-                  <input id="selectedImageRefInput" readonly placeholder="请从列表选择镜像" />
+                  <label for="imageDeployImageRefSelect">部署镜像</label>
+                  <select id="imageDeployImageRefSelect">
+                    <option value="">请选择镜像</option>
+                  </select>
                 </div>
                 <div class="table-wrap">
-                  <table>
+                  <table class="image-repo-table">
                     <thead>
                       <tr>
                         <th>Repository</th>
                         <th>Tag</th>
-                        <th>Image ID</th>
-                        <th>Digest</th>
                         <th>创建时间</th>
                         <th>大小</th>
+                        <th>Image ID</th>
+                        <th>Digest</th>
+                        <th>操作</th>
                       </tr>
                     </thead>
                     <tbody id="imageRepoTableBody"></tbody>
@@ -384,6 +488,34 @@
 
               <article class="card">
                 <h3>镜像部署</h3>
+                <div class="selected-image-panel">
+                  <div class="selected-image-head">
+                    <strong>当前选中镜像</strong>
+                    <span id="imageDeploySelectedBadge" class="precheck-badge pending">未选择</span>
+                  </div>
+                  <div class="selected-image-grid">
+                    <div class="selected-image-item">
+                      <small>Image Ref</small>
+                      <p id="imageDeploySelectedRef" class="mono">-</p>
+                    </div>
+                    <div class="selected-image-item">
+                      <small>Repository:Tag</small>
+                      <p id="imageDeploySelectedRepoTag">-</p>
+                    </div>
+                    <div class="selected-image-item">
+                      <small>构建时间</small>
+                      <p id="imageDeploySelectedCreatedAt">-</p>
+                    </div>
+                    <div class="selected-image-item">
+                      <small>镜像大小</small>
+                      <p id="imageDeploySelectedSize">-</p>
+                    </div>
+                    <div class="selected-image-item full-span">
+                      <small>Digest</small>
+                      <p id="imageDeploySelectedDigest" class="mono">-</p>
+                    </div>
+                  </div>
+                </div>
                 <form id="imageDeployForm" class="form-grid">
                   <label>应用
                     <select id="imageDeployAppSelect" required></select>
@@ -455,30 +587,59 @@
                       <option value="compose">compose</option>
                     </select>
                   </label>
-                  <label>Build ID（优先）
-                    <input id="deployBuildIdInput" type="number" min="1" placeholder="例如 12" />
+                  <label>构建任务（下拉选择）
+                    <select id="deployBuildSelect">
+                      <option value="">请选择（或改用镜像）</option>
+                    </select>
                   </label>
-                  <label>镜像引用（可选）
-                    <input id="deployImageRefInput" placeholder="image:tag 或 image@sha256:xxx" />
+                  <label>镜像引用（下拉选择）
+                    <select id="deployImageRefSelect">
+                      <option value="">请选择（或改用构建任务）</option>
+                    </select>
                   </label>
-                  <label>容器名（run 模式）
-                    <input id="deployContainerNameInput" value="app-prod" />
-                  </label>
-                  <label>端口映射（run，每行 8080:80）
-                    <textarea id="deployPortsInput" rows="4"></textarea>
-                  </label>
-                  <label>环境变量（run，每行 KEY=VALUE）
-                    <textarea id="deployEnvVarsInput" rows="4"></textarea>
-                  </label>
-                  <label>Compose 内容（compose 可选）
-                    <textarea id="deployComposeInput" rows="8"></textarea>
-                  </label>
-                  <label>远程目录（compose 可选）
-                    <input id="deployRemoteDirInput" placeholder="/opt/orion/app/prod" />
-                  </label>
-                  <label>部署超时秒数（可选）
-                    <input id="deployTimeoutInput" type="number" min="60" max="7200" placeholder="1800" />
-                  </label>
+                  <small class="inline-hint form-full">已选择构建任务时，部署优先使用该 Build 对应镜像；未选择时使用镜像下拉值。</small>
+                  <details id="deployRunOptionalPanel" class="fold-panel form-full">
+                    <summary>
+                      <span>可选参数（run 模式）</span>
+                      <small>容器名 / 端口映射 / 环境变量</small>
+                    </summary>
+                    <div class="fold-panel-body form-grid">
+                      <label>容器名（run 模式）
+                        <input id="deployContainerNameInput" value="app-prod" />
+                      </label>
+                      <label class="form-full">端口映射（run，每行 8080:80）
+                        <textarea id="deployPortsInput" rows="4"></textarea>
+                      </label>
+                      <label class="form-full">环境变量（run，每行 KEY=VALUE）
+                        <textarea id="deployEnvVarsInput" rows="4"></textarea>
+                      </label>
+                    </div>
+                  </details>
+                  <details id="deployComposeOptionalPanel" class="fold-panel form-full">
+                    <summary>
+                      <span>可选参数（compose 模式）</span>
+                      <small>Compose 内容 / 远程目录</small>
+                    </summary>
+                    <div class="fold-panel-body form-grid">
+                      <label class="form-full">Compose 内容（compose 可选）
+                        <textarea id="deployComposeInput" rows="8"></textarea>
+                      </label>
+                      <label>远程目录（compose 可选）
+                        <input id="deployRemoteDirInput" placeholder="/opt/orion/app/prod" />
+                      </label>
+                    </div>
+                  </details>
+                  <details id="deployAdvancedOptionalPanel" class="fold-panel form-full">
+                    <summary>
+                      <span>可选参数（高级）</span>
+                      <small>超时控制</small>
+                    </summary>
+                    <div class="fold-panel-body form-grid">
+                      <label>部署超时秒数（可选）
+                        <input id="deployTimeoutInput" type="number" min="60" max="7200" placeholder="1800" />
+                      </label>
+                    </div>
+                  </details>
                   <div class="action-row form-full">
                     <button class="primary-btn" type="submit">提交部署</button>
                     <button id="saveDeployConfigBtn" class="ghost-btn" type="button">保存配置</button>
@@ -530,7 +691,17 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <div id="digestModal" class="digest-modal" hidden>
+      <div id="digestModalBackdrop" class="digest-modal-backdrop"></div>
+      <div class="digest-modal-panel" role="dialog" aria-modal="true" aria-labelledby="digestModalTitle">
+        <div class="digest-modal-head">
+          <h3 id="digestModalTitle">Digest 详情</h3>
+          <button id="closeDigestModalBtn" class="ghost-btn" type="button">关闭</button>
+        </div>
+        <pre id="digestModalValue" class="mono digest-modal-value">-</pre>
+      </div>
+    </div>
 
-    <script src="/assets/app.js" defer></script>
+    <script src="/assets/app.js?v=20260303-4" defer></script>
   </body>
 </html>

@@ -101,21 +101,41 @@ async def _process_build_task(task: BuildTask, worker_id: int) -> None:
         build.status = BUILD_STATUS_RUNNING
         session.commit()
 
-        context_path = Path(task.payload.context_path).expanduser() if task.payload.context_path else settings.workspace_dir / app.name
-        if not context_path.exists():
-            build.status = BUILD_STATUS_FAILED
-            build.error_message = f"Build context not found: {context_path}"
-            session.commit()
-            await _emit_log(build.id, build.error_message)
-            return
-
         build_dir = settings.builds_dir / str(build.id)
         build_dir.mkdir(parents=True, exist_ok=True)
+
+        context_path: Path
+        if task.payload.context_path:
+            context_path = Path(task.payload.context_path).expanduser()
+            if not context_path.is_absolute():
+                context_path = settings.orion_home / context_path
+            if not context_path.exists():
+                build.status = BUILD_STATUS_FAILED
+                build.error_message = f"Build context not found: {context_path}"
+                session.commit()
+                await _emit_log(build.id, build.error_message)
+                return
+            await _emit_log(build.id, f"Using custom build context: {context_path}")
+        else:
+            context_path = settings.workspace_dir / app.name
+            context_path.mkdir(parents=True, exist_ok=True)
+            await _emit_log(build.id, f"Using default build context: {context_path}")
 
         dockerfile_override: Path | None = None
         if task.payload.dockerfile_content:
             dockerfile_override = build_dir / "Dockerfile"
             dockerfile_override.write_text(task.payload.dockerfile_content, encoding="utf-8")
+        else:
+            dockerfile_in_context = context_path / "Dockerfile"
+            if not dockerfile_in_context.exists():
+                build.status = BUILD_STATUS_FAILED
+                build.error_message = (
+                    f"Dockerfile not found in context: {dockerfile_in_context}. "
+                    "Please provide dockerfile_content or add Dockerfile in context."
+                )
+                session.commit()
+                await _emit_log(build.id, build.error_message)
+                return
 
         timeout = task.payload.timeout_seconds or settings.build_timeout_seconds
         command = ["docker", "build", "-t", task.payload.image_tag]
@@ -127,22 +147,45 @@ async def _process_build_task(task: BuildTask, worker_id: int) -> None:
 
         await _emit_log(build.id, f"Worker {worker_id} running: {' '.join(command)}")
 
-        try:
-            return_code = await run_streaming_command(
-                command,
-                on_line=lambda line: _emit_log(build.id, line),
-                timeout_seconds=timeout,
-            )
-        except Exception as exc:  # noqa: BLE001
+        max_retry_count = max(0, settings.build_retry_limit)
+        max_attempts = max_retry_count + 1
+        return_code = -1
+        execution_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            await _emit_log(build.id, f"Build attempt {attempt}/{max_attempts}")
+            try:
+                return_code = await run_streaming_command(
+                    command,
+                    on_line=lambda line: _emit_log(build.id, line),
+                    timeout_seconds=timeout,
+                )
+                execution_error = None
+            except Exception as exc:  # noqa: BLE001
+                execution_error = exc
+
+            if execution_error is None and return_code == 0:
+                break
+
+            if attempt <= max_retry_count:
+                if execution_error is not None:
+                    error_text = str(execution_error) or execution_error.__class__.__name__
+                    await _emit_log(build.id, f"Attempt {attempt} failed with execution error: {error_text}. Retrying...")
+                else:
+                    await _emit_log(build.id, f"Attempt {attempt} failed with exit code {return_code}. Retrying...")
+
+        if execution_error is not None:
+            error_text = str(execution_error) or execution_error.__class__.__name__
             build.status = BUILD_STATUS_FAILED
-            build.error_message = str(exc)
+            build.error_message = (
+                f"Build failed after {max_attempts} attempts due to execution error: {error_text}"
+            )
             session.commit()
-            await _emit_log(build.id, f"Build timeout or execution error: {exc}")
+            await _emit_log(build.id, build.error_message)
             return
 
         if return_code != 0:
             build.status = BUILD_STATUS_FAILED
-            build.error_message = f"docker build failed with exit code {return_code}"
+            build.error_message = f"docker build failed with exit code {return_code} after {max_attempts} attempts"
             session.commit()
             await _emit_log(build.id, build.error_message)
             return
@@ -198,4 +241,3 @@ def is_build_queued_or_running(session: Session, build_id: int) -> bool:
     if build is None:
         return False
     return build.status in {BUILD_STATUS_QUEUED, BUILD_STATUS_RUNNING}
-

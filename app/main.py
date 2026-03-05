@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import apps, build_configs, builds, deploy, deploy_configs, environments, image_repo, precheck
+from app.api.routes import ai_build, apps, build_configs, builds, deploy, deploy_configs, environments, image_repo, model_configs, precheck
 from app.core.config import settings
 from app.db.init_db import init_db
 from app.services.build_service import start_build_workers, stop_build_workers
@@ -31,9 +31,11 @@ app.include_router(apps.router, prefix=settings.api_prefix)
 app.include_router(environments.router, prefix=settings.api_prefix)
 app.include_router(builds.router, prefix=settings.api_prefix)
 app.include_router(build_configs.router, prefix=settings.api_prefix)
+app.include_router(model_configs.router, prefix=settings.api_prefix)
 app.include_router(deploy.router, prefix=settings.api_prefix)
 app.include_router(deploy_configs.router, prefix=settings.api_prefix)
 app.include_router(image_repo.router, prefix=settings.api_prefix)
+app.include_router(ai_build.router, prefix=settings.api_prefix)
 app.include_router(precheck.router, prefix=settings.api_prefix)
 
 ui_dir = Path(__file__).parent / "ui"

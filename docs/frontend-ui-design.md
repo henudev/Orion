@@ -294,6 +294,7 @@
 - 部署任务：`POST /api/deploy`、`GET /api/deploy`、`GET /api/deploy/{id}`、`GET /api/deploy/{id}/logs`
 - 部署配置：`GET/POST /api/deploy-configs`、`GET/PUT/DELETE /api/deploy-configs/{id}`、`POST /api/deploy-configs/{id}/run`
 - 镜像仓库：`GET /api/image-repo/images?page=1&page_size=10`、`POST /api/image-repo/deploy`
+- AI 快速构建：`GET/POST /api/model-configs`、`PUT/DELETE /api/model-configs/{id}`、`POST /api/model-configs/{id}/test-connection`、`POST /api/ai/generate-dockerfile`
 
 ## 11. 推荐实现优先级（MVP）
 

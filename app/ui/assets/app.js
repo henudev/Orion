@@ -5,7 +5,9 @@ const state = {
   environments: [],
   builds: [],
   buildConfigs: [],
+  modelConfigs: [],
   imageRepoImages: [],
+  imageRepoAllImages: [],
   imageRepoPage: 1,
   imageRepoPageSize: 10,
   imageRepoTotal: 0,
@@ -16,9 +18,14 @@ const state = {
   buildWatchTimer: null,
   deployWatchTimer: null,
   imageRepoDeployWatchTimer: null,
+  aiGeneratedDockerfile: "",
+  aiGenerating: false,
+  aiGenerateAbortController: null,
 };
 
 const byId = (id) => document.getElementById(id);
+const ORION_TIMEZONE = "Asia/Shanghai";
+const ORION_TIMEZONE_OFFSET_MINUTES = 8 * 60;
 
 function showToast(message, typeOrIsError = "success") {
   const toast = byId("toast");
@@ -126,6 +133,35 @@ function escapeHtml(text) {
     .replaceAll('"', "&quot;");
 }
 
+function parseDateTimeMillis(dateText) {
+  if (!dateText) return Number.NaN;
+  const raw = String(dateText).trim();
+  if (!raw) return Number.NaN;
+
+  const hasTimezone = /([zZ]|[+\-]\d{2}:\d{2})$/.test(raw);
+  if (hasTimezone) {
+    return new Date(raw).getTime();
+  }
+
+  const normalized = raw.replace(" ", "T");
+  const match = normalized.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$/
+  );
+  if (!match) {
+    return new Date(raw).getTime();
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = match[6] ? Number(match[6]) : 0;
+  const fractionRaw = match[7] || "0";
+  const millisecond = Number(fractionRaw.padEnd(3, "0").slice(0, 3));
+  return Date.UTC(year, month - 1, day, hour, minute, second, millisecond) - ORION_TIMEZONE_OFFSET_MINUTES * 60 * 1000;
+}
+
 function setOutput(id, text) {
   byId(id).textContent = text;
 }
@@ -138,6 +174,28 @@ function appendOutput(id, line) {
   el.scrollTop = el.scrollHeight;
 }
 
+function isAbortError(error) {
+  if (!error) return false;
+  const name = String(error.name || "");
+  const message = String(error.message || error);
+  return name === "AbortError" || /aborted|abort/i.test(message);
+}
+
+function setAiGenerating(isGenerating) {
+  state.aiGenerating = Boolean(isGenerating);
+  byId("generateDockerfileBtn").disabled = state.aiGenerating;
+  byId("stopGenerateDockerfileBtn").disabled = !state.aiGenerating;
+}
+
+function openDigestModal(value) {
+  byId("digestModalValue").textContent = value || "-";
+  byId("digestModal").hidden = false;
+}
+
+function closeDigestModal() {
+  byId("digestModal").hidden = true;
+}
+
 function setActiveView(name) {
   document.querySelectorAll(".nav-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.view === name);
@@ -145,6 +203,11 @@ function setActiveView(name) {
   document.querySelectorAll(".view").forEach((view) => {
     view.classList.toggle("active", view.id === `view-${name}`);
   });
+  if (name === "images") {
+    Promise.all([loadImageRepoImages(), loadAllImageRepoImagesForSelect()]).catch((error) => {
+      showToast(`镜像列表加载失败: ${error.message}`, "warning");
+    });
+  }
 }
 
 function formatPercent(successCount, totalCount) {
@@ -154,9 +217,10 @@ function formatPercent(successCount, totalCount) {
 
 function formatDateTime(dateText) {
   if (!dateText) return "--";
-  const date = new Date(dateText);
-  if (Number.isNaN(date.getTime())) return String(dateText);
-  return date.toLocaleString("zh-CN", { hour12: false });
+  const millis = parseDateTimeMillis(dateText);
+  if (!Number.isFinite(millis)) return String(dateText);
+  const date = new Date(millis);
+  return date.toLocaleString("zh-CN", { hour12: false, timeZone: ORION_TIMEZONE });
 }
 
 function summarizeStatus(items) {
@@ -212,8 +276,10 @@ function renderMetrics() {
   const recentBuild = state.builds[0];
   const recentDeploy = state.deployments[0];
 
-  const latestBuildTime = recentBuild?.created_at ? new Date(recentBuild.created_at).getTime() : 0;
-  const latestDeployTime = recentDeploy?.created_at ? new Date(recentDeploy.created_at).getTime() : 0;
+  const latestBuildTimeRaw = recentBuild?.created_at ? parseDateTimeMillis(recentBuild.created_at) : 0;
+  const latestDeployTimeRaw = recentDeploy?.created_at ? parseDateTimeMillis(recentDeploy.created_at) : 0;
+  const latestBuildTime = Number.isFinite(latestBuildTimeRaw) ? latestBuildTimeRaw : 0;
+  const latestDeployTime = Number.isFinite(latestDeployTimeRaw) ? latestDeployTimeRaw : 0;
   const latestActivity = latestBuildTime >= latestDeployTime ? recentBuild?.created_at : recentDeploy?.created_at;
 
   byId("metricApps").textContent = String(state.apps.length);
@@ -230,7 +296,10 @@ function renderMetrics() {
   byId("heroTotalTasks").textContent = String(buildTotal + deployTotal);
   byId("heroBuildSuccessRate").textContent = formatPercent(buildSummary.success, buildTotal);
   byId("heroDeploySuccessRate").textContent = formatPercent(deploySummary.success, deployTotal);
-  byId("heroLastRefresh").textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  byId("heroLastRefresh").textContent = new Date().toLocaleTimeString("zh-CN", {
+    hour12: false,
+    timeZone: ORION_TIMEZONE,
+  });
 
   byId("dashboardRecentBuild").textContent = formatBuildSummary(recentBuild);
   byId("dashboardRecentDeploy").textContent = formatDeploySummary(recentDeploy);
@@ -251,7 +320,77 @@ function setSelectedDeployConfigId(configId) {
 }
 
 function setSelectedImageRef(imageRef) {
-  byId("selectedImageRefInput").value = imageRef ? String(imageRef) : "";
+  const value = imageRef ? String(imageRef) : "";
+  const select = byId("imageDeployImageRefSelect");
+  if (!select) return;
+  const exists = Array.from(select.options).some((option) => option.value === value);
+  if (value && !exists) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = `${value}（当前选择）`;
+    select.appendChild(option);
+  }
+  select.value = value;
+  renderSelectedImageInfo();
+}
+
+function getImageByRef(imageRef) {
+  const value = String(imageRef || "").trim();
+  if (!value) return null;
+  return (
+    state.imageRepoAllImages.find((item) => String(item.image_ref || "").trim() === value) ||
+    state.imageRepoImages.find((item) => String(item.image_ref || "").trim() === value) ||
+    null
+  );
+}
+
+function renderSelectedImageInfo() {
+  const selectedRef = byId("imageDeployImageRefSelect").value.trim();
+  const badge = byId("imageDeploySelectedBadge");
+  const refEl = byId("imageDeploySelectedRef");
+  const repoTagEl = byId("imageDeploySelectedRepoTag");
+  const createdAtEl = byId("imageDeploySelectedCreatedAt");
+  const sizeEl = byId("imageDeploySelectedSize");
+  const digestEl = byId("imageDeploySelectedDigest");
+
+  if (!selectedRef) {
+    badge.className = "precheck-badge pending";
+    badge.textContent = "未选择";
+    refEl.textContent = "-";
+    repoTagEl.textContent = "-";
+    createdAtEl.textContent = "-";
+    sizeEl.textContent = "-";
+    digestEl.textContent = "-";
+    return;
+  }
+
+  const image = getImageByRef(selectedRef);
+  if (!image) {
+    badge.className = "precheck-badge fail";
+    badge.textContent = "仅引用";
+    refEl.textContent = selectedRef;
+    repoTagEl.textContent = "未找到镜像详情（可能已删除或未刷新）";
+    createdAtEl.textContent = "-";
+    sizeEl.textContent = "-";
+    digestEl.textContent = "-";
+    return;
+  }
+
+  badge.className = "precheck-badge pass";
+  badge.textContent = "已选中";
+  refEl.textContent = image.image_ref || selectedRef;
+  repoTagEl.textContent = `${image.repository || "-"}:${image.tag || "-"}`;
+  createdAtEl.textContent = formatDateTime(image.created_at);
+  sizeEl.textContent = formatBytes(image.size_bytes);
+  digestEl.textContent = image.digest || "-";
+}
+
+function setSelectedModelConfigId(configId) {
+  const value = configId ? String(configId) : "";
+  byId("modelConfigIdInput").value = value;
+  if (value && byId("aiModelConfigSelect")) {
+    byId("aiModelConfigSelect").value = value;
+  }
 }
 
 function getBuildPayloadFromForm() {
@@ -267,8 +406,8 @@ function getBuildPayloadFromForm() {
 }
 
 function getDeployPayloadFromForm() {
-  const buildIdRaw = byId("deployBuildIdInput").value.trim();
-  const imageRefRaw = byId("deployImageRefInput").value.trim();
+  const buildIdRaw = byId("deployBuildSelect").value.trim();
+  const imageRefRaw = byId("deployImageRefSelect").value.trim();
   const timeoutRaw = byId("deployTimeoutInput").value.trim();
   return {
     app_id: Number(byId("deployAppSelect").value),
@@ -290,7 +429,7 @@ function getImageDeployPayloadFromForm() {
   return {
     app_id: Number(byId("imageDeployAppSelect").value),
     environment_id: Number(byId("imageDeployEnvSelect").value),
-    image_ref: byId("selectedImageRefInput").value.trim(),
+    image_ref: byId("imageDeployImageRefSelect").value.trim(),
     mode: byId("imageDeployModeSelect").value,
     container_name: byId("imageDeployContainerNameInput").value.trim() || "app-prod",
     ports: parseLineList(byId("imageDeployPortsInput").value),
@@ -301,6 +440,44 @@ function getImageDeployPayloadFromForm() {
   };
 }
 
+function getModelConfigPayloadFromForm() {
+  const temperatureRaw = byId("modelTemperatureInput").value.trim();
+  const maxTokensRaw = byId("modelMaxTokensInput").value.trim();
+  return {
+    name: byId("modelConfigNameInput").value.trim(),
+    provider: byId("modelProviderSelect").value,
+    base_url: byId("modelBaseUrlInput").value.trim(),
+    model_name: byId("modelNameInput").value.trim(),
+    api_key: byId("modelApiKeyInput").value.trim() || null,
+    temperature: temperatureRaw ? Number(temperatureRaw) : null,
+    max_tokens: maxTokensRaw ? Number(maxTokensRaw) : null,
+    is_default: byId("modelIsDefaultInput").checked,
+  };
+}
+
+function syncBuildOptionalPanel() {
+  const panel = byId("buildOptionalPanel");
+  if (!panel) return;
+  const hasOptionalValue = Boolean(
+    byId("buildContextInput").value.trim() ||
+      byId("buildArgsInput").value.trim() ||
+      byId("buildTimeoutInput").value.trim()
+  );
+  panel.open = hasOptionalValue;
+}
+
+function syncDeployOptionalPanels() {
+  const mode = byId("deployModeSelect").value;
+  const runPanel = byId("deployRunOptionalPanel");
+  const composePanel = byId("deployComposeOptionalPanel");
+  if (!runPanel || !composePanel) return;
+  if (mode === "run") {
+    composePanel.open = false;
+    return;
+  }
+  runPanel.open = false;
+}
+
 function fillBuildFormByConfig(config) {
   byId("buildConfigNameInput").value = config.name || "";
   byId("buildAppSelect").value = String(config.app_id);
@@ -309,6 +486,7 @@ function fillBuildFormByConfig(config) {
   byId("buildArgsInput").value = stringifyKeyValueLines(config.build_args);
   byId("dockerfileInput").value = config.dockerfile_content || "";
   byId("buildTimeoutInput").value = config.timeout_seconds ? String(config.timeout_seconds) : "";
+  syncBuildOptionalPanel();
   setSelectedBuildConfigId(config.id);
 }
 
@@ -317,15 +495,77 @@ function fillDeployFormByConfig(config) {
   byId("deployAppSelect").value = String(config.app_id);
   byId("deployEnvSelect").value = String(config.environment_id);
   byId("deployModeSelect").value = config.mode || "run";
-  byId("deployBuildIdInput").value = config.build_id ? String(config.build_id) : "";
-  byId("deployImageRefInput").value = config.image_ref || "";
+  const buildSelect = byId("deployBuildSelect");
+  const imageSelect = byId("deployImageRefSelect");
+  const buildValue = config.build_id ? String(config.build_id) : "";
+  const imageValue = config.image_ref || "";
+  const buildExists = Array.from(buildSelect.options).some((option) => option.value === buildValue);
+  if (buildValue && !buildExists) {
+    const option = document.createElement("option");
+    option.value = buildValue;
+    option.textContent = `#${buildValue}（配置值）`;
+    buildSelect.appendChild(option);
+  }
+  const imageExists = Array.from(imageSelect.options).some((option) => option.value === imageValue);
+  if (imageValue && !imageExists) {
+    const option = document.createElement("option");
+    option.value = imageValue;
+    option.textContent = `${imageValue}（配置值）`;
+    imageSelect.appendChild(option);
+  }
+  buildSelect.value = buildValue;
+  imageSelect.value = imageValue;
   byId("deployContainerNameInput").value = config.container_name || "app-prod";
   byId("deployPortsInput").value = stringifyLineList(config.ports);
   byId("deployEnvVarsInput").value = stringifyKeyValueLines(config.env_vars);
   byId("deployComposeInput").value = config.compose_content || "";
   byId("deployRemoteDirInput").value = config.remote_dir || "";
   byId("deployTimeoutInput").value = config.timeout_seconds ? String(config.timeout_seconds) : "";
+  const runPanel = byId("deployRunOptionalPanel");
+  const composePanel = byId("deployComposeOptionalPanel");
+  const mode = byId("deployModeSelect").value;
+  const hasRunOptionalValue = Boolean(
+    byId("deployContainerNameInput").value.trim() !== "app-prod" ||
+      byId("deployPortsInput").value.trim() ||
+      byId("deployEnvVarsInput").value.trim()
+  );
+  const hasComposeOptionalValue = Boolean(
+    byId("deployComposeInput").value.trim() || byId("deployRemoteDirInput").value.trim()
+  );
+  if (runPanel) {
+    runPanel.open = mode === "run" && hasRunOptionalValue;
+  }
+  if (composePanel) {
+    composePanel.open = mode === "compose" && hasComposeOptionalValue;
+  }
+  syncDeployOptionalPanels();
+  byId("deployAdvancedOptionalPanel").open = Boolean(byId("deployTimeoutInput").value.trim());
   setSelectedDeployConfigId(config.id);
+}
+
+function applyModelProviderDefaults(overrideBaseUrl = false) {
+  const provider = byId("modelProviderSelect").value;
+  const baseUrlInput = byId("modelBaseUrlInput");
+  const currentBaseUrl = baseUrlInput.value.trim();
+  if (overrideBaseUrl || !currentBaseUrl) {
+    baseUrlInput.value = provider === "ollama" ? "http://127.0.0.1:11434" : "https://api.openai.com/v1";
+  }
+}
+
+function fillModelConfigForm(config) {
+  byId("modelConfigIdInput").value = String(config.id);
+  byId("modelConfigNameInput").value = config.name || "";
+  byId("modelProviderSelect").value = config.provider || "openai";
+  byId("modelBaseUrlInput").value = config.base_url || "";
+  byId("modelNameInput").value = config.model_name || "";
+  byId("modelApiKeyInput").value = "";
+  byId("clearModelApiKeyInput").checked = false;
+  byId("modelTemperatureInput").value =
+    config.temperature === null || config.temperature === undefined ? "" : String(config.temperature);
+  byId("modelMaxTokensInput").value =
+    config.max_tokens === null || config.max_tokens === undefined ? "" : String(config.max_tokens);
+  byId("modelIsDefaultInput").checked = Boolean(config.is_default);
+  setSelectedModelConfigId(config.id);
 }
 
 function renderAppTable() {
@@ -340,7 +580,7 @@ function renderAppTable() {
       <td>${app.id}</td>
       <td>${escapeHtml(app.name)}</td>
       <td>${escapeHtml(app.description || "-")}</td>
-      <td>${escapeHtml(app.created_at)}</td>
+      <td>${escapeHtml(formatDateTime(app.created_at))}</td>
       <td>
         <button type="button" class="ghost-btn app-edit-btn" data-app-id="${app.id}">编辑</button>
         <button type="button" class="ghost-btn app-delete-btn" data-app-id="${app.id}">删除</button>
@@ -538,7 +778,7 @@ function renderBuildConfigTable() {
       <td>${escapeHtml(config.name)}</td>
       <td>${escapeHtml(appName)}</td>
       <td>${escapeHtml(config.image_tag)}</td>
-      <td>${escapeHtml(config.updated_at)}</td>
+      <td>${escapeHtml(formatDateTime(config.updated_at))}</td>
       <td>
         <button type="button" class="ghost-btn build-config-load-btn" data-config-id="${config.id}">加载</button>
         <button type="button" class="ghost-btn build-config-run-btn" data-config-id="${config.id}">运行</button>
@@ -582,6 +822,127 @@ function renderBuildConfigTable() {
       const configId = Number(btn.dataset.configId);
       if (!configId) return;
       await deleteBuildConfig(configId);
+    });
+  });
+}
+
+function renderAiModelConfigSelect() {
+  const select = byId("aiModelConfigSelect");
+  if (!state.modelConfigs.length) {
+    select.innerHTML = '<option value="">暂无模型配置</option>';
+    return;
+  }
+
+  const options = state.modelConfigs
+    .map((config) => {
+      const suffix = config.is_default ? "（默认）" : "";
+      return `<option value="${config.id}">${escapeHtml(config.name)} | ${escapeHtml(config.provider)} | ${escapeHtml(config.model_name)}${suffix}</option>`;
+    })
+    .join("");
+  select.innerHTML = options;
+
+  const currentSelected = select.value;
+  if (currentSelected && state.modelConfigs.some((item) => String(item.id) === String(currentSelected))) {
+    return;
+  }
+  const defaultConfig = state.modelConfigs.find((item) => item.is_default) || state.modelConfigs[0];
+  select.value = String(defaultConfig.id);
+}
+
+async function testModelConfig(configId) {
+  if (!configId) {
+    showToast("请先选择模型配置", true);
+    return;
+  }
+  try {
+    const data = await api(`/api/model-configs/${configId}/test-connection`, { method: "POST" });
+    showToast(data.ok ? `模型配置 #${configId} 测试通过` : `模型配置 #${configId} 测试失败`, !data.ok);
+  } catch (error) {
+    showToast(`测试模型配置失败: ${error.message}`, true);
+  }
+}
+
+async function deleteModelConfig(configId) {
+  const config = state.modelConfigs.find((item) => item.id === configId);
+  const ok = window.confirm(`确认删除模型配置 ${config?.name || configId} (#${configId})？`);
+  if (!ok) return;
+  try {
+    await api(`/api/model-configs/${configId}`, { method: "DELETE" });
+    if (String(configId) === byId("modelConfigIdInput").value) {
+      setSelectedModelConfigId(null);
+      byId("modelConfigForm").reset();
+      byId("modelProviderSelect").value = "openai";
+      applyModelProviderDefaults(true);
+    }
+    await loadModelConfigs();
+    showToast(`模型配置 #${configId} 已删除`);
+  } catch (error) {
+    showToast(`删除模型配置失败: ${error.message}`, true);
+  }
+}
+
+function renderModelConfigTable() {
+  const tbody = byId("modelConfigsTableBody");
+  if (!state.modelConfigs.length) {
+    tbody.innerHTML = '<tr><td colspan="6">暂无模型配置</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = state.modelConfigs
+    .map((config) => {
+      const selected = String(config.id) === byId("modelConfigIdInput").value ? "selected" : "";
+      return `<tr data-model-config-id="${config.id}" class="${selected}">
+      <td>${config.id}</td>
+      <td>${escapeHtml(config.name)}</td>
+      <td>${escapeHtml(config.provider)}</td>
+      <td>${escapeHtml(config.model_name)}</td>
+      <td>${config.is_default ? "是" : "-"}</td>
+      <td>
+        <button type="button" class="ghost-btn model-config-load-btn" data-model-config-id="${config.id}">加载</button>
+        <button type="button" class="ghost-btn model-config-test-btn" data-model-config-id="${config.id}">测试</button>
+        <button type="button" class="ghost-btn model-config-delete-btn" data-model-config-id="${config.id}">删除</button>
+      </td>
+    </tr>`;
+    })
+    .join("");
+
+  tbody.querySelectorAll(".model-config-load-btn").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const configId = Number(btn.dataset.modelConfigId);
+      const config = state.modelConfigs.find((item) => item.id === configId);
+      if (!config) return;
+      fillModelConfigForm(config);
+      renderModelConfigTable();
+      renderAiModelConfigSelect();
+      showToast(`已加载模型配置 #${configId}`);
+    });
+  });
+
+  tbody.querySelectorAll(".model-config-test-btn").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const configId = Number(btn.dataset.modelConfigId);
+      await testModelConfig(configId);
+    });
+  });
+
+  tbody.querySelectorAll(".model-config-delete-btn").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const configId = Number(btn.dataset.modelConfigId);
+      await deleteModelConfig(configId);
+    });
+  });
+
+  tbody.querySelectorAll("tr[data-model-config-id]").forEach((row) => {
+    row.addEventListener("click", () => {
+      const configId = Number(row.dataset.modelConfigId);
+      const config = state.modelConfigs.find((item) => item.id === configId);
+      if (!config) return;
+      fillModelConfigForm(config);
+      renderModelConfigTable();
+      renderAiModelConfigSelect();
     });
   });
 }
@@ -642,26 +1003,37 @@ function renderImageRepoPagination(extraHint = "") {
 function renderImageRepoTable(errorText = "") {
   const tbody = byId("imageRepoTableBody");
   if (errorText) {
-    tbody.innerHTML = `<tr><td colspan="6">${escapeHtml(errorText)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7">${escapeHtml(errorText)}</td></tr>`;
     renderImageRepoPagination("加载失败");
     return;
   }
   if (!state.imageRepoImages.length) {
-    tbody.innerHTML = '<tr><td colspan="6">暂无本地镜像</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7">暂无本地镜像</td></tr>';
     renderImageRepoPagination();
     return;
   }
 
   tbody.innerHTML = state.imageRepoImages
     .map((image) => {
-      const rowSelected = byId("selectedImageRefInput").value === image.image_ref ? "selected" : "";
+      const rowSelected = byId("imageDeployImageRefSelect").value === image.image_ref ? "selected" : "";
+      const digestValue = image.digest || "";
+      const digestShort = digestValue ? (digestValue.length > 18 ? `${digestValue.slice(0, 18)}...` : digestValue) : "";
+      const digestCell = digestValue
+        ? `<div class="digest-cell">
+            <span class="digest-short" title="${escapeHtml(digestValue)}">${escapeHtml(digestShort)}</span>
+            <button type="button" class="ghost-btn digest-view-btn" data-digest="${encodeURIComponent(digestValue)}">查看</button>
+          </div>`
+        : "-";
       return `<tr data-image-ref="${escapeHtml(image.image_ref)}" class="${rowSelected}">
       <td>${escapeHtml(image.repository)}</td>
       <td>${escapeHtml(image.tag)}</td>
-      <td>${escapeHtml(image.image_id)}</td>
-      <td>${escapeHtml(image.digest || "-")}</td>
       <td>${escapeHtml(formatDateTime(image.created_at))}</td>
       <td>${escapeHtml(formatBytes(image.size_bytes))}</td>
+      <td>${escapeHtml(image.image_id)}</td>
+      <td>${digestCell}</td>
+      <td>
+        <button type="button" class="ghost-btn image-delete-btn" data-image-ref="${encodeURIComponent(image.image_ref)}">删除</button>
+      </td>
     </tr>`;
     })
     .join("");
@@ -675,6 +1047,24 @@ function renderImageRepoTable(errorText = "") {
       showToast(`已选择镜像 ${imageRef}`, "info");
     });
   });
+
+  tbody.querySelectorAll(".digest-view-btn").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const digestValue = decodeURIComponent(btn.dataset.digest || "");
+      openDigestModal(digestValue);
+    });
+  });
+
+  tbody.querySelectorAll(".image-delete-btn").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const imageRef = decodeURIComponent(btn.dataset.imageRef || "");
+      if (!imageRef) return;
+      await deleteImageFromRepo(imageRef);
+    });
+  });
+
   renderImageRepoPagination();
 }
 
@@ -694,7 +1084,7 @@ function renderDeploymentTable() {
       <td>${escapeHtml(envName)}</td>
       <td>${escapeHtml(deploy.mode)}</td>
       <td>${statusBadge(deploy.status)}</td>
-      <td>${escapeHtml(deploy.created_at)}</td>
+      <td>${escapeHtml(formatDateTime(deploy.created_at))}</td>
       <td>
         <button type="button" class="ghost-btn deploy-detail-btn" data-deploy-id="${deploy.id}">详情</button>
         <button type="button" class="ghost-btn deploy-log-btn" data-deploy-id="${deploy.id}">日志</button>
@@ -775,7 +1165,83 @@ function renderSelectOptions() {
   byId("deployEnvSelect").innerHTML = envOptions;
   byId("imageDeployEnvSelect").innerHTML = envOptions;
   byId("remoteEnvSelect").innerHTML = envOptions;
+  renderDeployBuildSelect();
+  renderDeployImageRefSelects();
   renderDeploymentConfigSelect();
+}
+
+function renderDeployBuildSelect() {
+  const select = byId("deployBuildSelect");
+  const currentValue = select.value;
+  const options = state.builds
+    .filter((build) => String(build.status || "").toLowerCase() === "success")
+    .map((build) => {
+      const appName = state.apps.find((item) => item.id === build.app_id)?.name || `#${build.app_id}`;
+      const label = `#${build.id} | ${appName} | ${build.image_tag} | ${formatDateTime(build.created_at)}`;
+      return `<option value="${build.id}">${escapeHtml(label)}</option>`;
+    })
+    .join("");
+  select.innerHTML = `<option value="">请选择构建任务（或改用镜像）</option>${options}`;
+  if (currentValue) {
+    const exists = Array.from(select.options).some((option) => option.value === currentValue);
+    if (!exists) {
+      const option = document.createElement("option");
+      option.value = currentValue;
+      option.textContent = `#${currentValue}（当前值）`;
+      select.appendChild(option);
+    }
+    select.value = currentValue;
+  }
+}
+
+function renderDeployImageRefSelects() {
+  const deploySelect = byId("deployImageRefSelect");
+  const imageDeploySelect = byId("imageDeployImageRefSelect");
+  const deployCurrentValue = deploySelect.value;
+  const imageDeployCurrentValue = imageDeploySelect.value;
+
+  const source = state.imageRepoAllImages.length ? state.imageRepoAllImages : state.imageRepoImages;
+  const optionItems = [];
+  const seen = new Set();
+  for (const image of source) {
+    const imageRef = String(image.image_ref || "").trim();
+    if (!imageRef || seen.has(imageRef)) continue;
+    seen.add(imageRef);
+    optionItems.push(image);
+  }
+
+  const options = optionItems
+    .map((image) => {
+      const label = `${image.image_ref} | ${formatDateTime(image.created_at)} | ${formatBytes(image.size_bytes)}`;
+      return `<option value="${escapeHtml(image.image_ref)}">${escapeHtml(label)}</option>`;
+    })
+    .join("");
+
+  deploySelect.innerHTML = `<option value="">请选择镜像（或改用构建任务）</option>${options}`;
+  imageDeploySelect.innerHTML = `<option value="">请选择镜像</option>${options}`;
+
+  if (deployCurrentValue) {
+    const exists = Array.from(deploySelect.options).some((option) => option.value === deployCurrentValue);
+    if (!exists) {
+      const option = document.createElement("option");
+      option.value = deployCurrentValue;
+      option.textContent = `${deployCurrentValue}（当前值）`;
+      deploySelect.appendChild(option);
+    }
+    deploySelect.value = deployCurrentValue;
+  }
+
+  if (imageDeployCurrentValue) {
+    const exists = Array.from(imageDeploySelect.options).some((option) => option.value === imageDeployCurrentValue);
+    if (!exists) {
+      const option = document.createElement("option");
+      option.value = imageDeployCurrentValue;
+      option.textContent = `${imageDeployCurrentValue}（当前值）`;
+      imageDeploySelect.appendChild(option);
+    }
+    imageDeploySelect.value = imageDeployCurrentValue;
+  }
+  renderSelectedImageInfo();
 }
 
 async function loadApps() {
@@ -798,6 +1264,7 @@ async function loadEnvironments() {
 async function loadBuilds() {
   state.builds = await api("/api/builds?limit=200");
   renderBuildTable();
+  renderDeployBuildSelect();
   renderMetrics();
 }
 
@@ -805,6 +1272,12 @@ async function loadBuildConfigs() {
   state.buildConfigs = await api("/api/build-configs?limit=200");
   renderBuildConfigTable();
   renderMetrics();
+}
+
+async function loadModelConfigs() {
+  state.modelConfigs = await api("/api/model-configs?limit=200");
+  renderAiModelConfigSelect();
+  renderModelConfigTable();
 }
 
 async function loadImageRepoImages() {
@@ -820,13 +1293,36 @@ async function loadImageRepoImages() {
       return await loadImageRepoImages();
     }
     renderImageRepoTable();
+    renderDeployImageRefSelects();
   } catch (error) {
     state.imageRepoImages = [];
     state.imageRepoTotal = 0;
     state.imageRepoTotalPages = 0;
     renderImageRepoTable(`镜像列表加载失败: ${error.message}`);
+    renderSelectedImageInfo();
     showToast(`镜像列表加载失败: ${error.message}`, "warning");
   }
+}
+
+async function loadAllImageRepoImagesForSelect() {
+  const pageSize = 100;
+  let page = 1;
+  let totalPages = 1;
+  const collected = [];
+  while (page <= totalPages) {
+    const data = await api(`/api/image-repo/images?page=${page}&page_size=${pageSize}`);
+    collected.push(...(data.items || []));
+    totalPages = Number(data.total_pages || 0) || 1;
+    page += 1;
+  }
+  const seen = new Set();
+  state.imageRepoAllImages = collected.filter((item) => {
+    const imageRef = String(item?.image_ref || "").trim();
+    if (!imageRef || seen.has(imageRef)) return false;
+    seen.add(imageRef);
+    return true;
+  });
+  renderDeployImageRefSelects();
 }
 
 async function loadDeploymentConfigs() {
@@ -848,7 +1344,9 @@ async function loadAll() {
       loadEnvironments(),
       loadBuilds(),
       loadBuildConfigs(),
+      loadModelConfigs(),
       loadImageRepoImages(),
+      loadAllImageRepoImagesForSelect(),
       loadDeploymentConfigs(),
       loadDeployments(),
     ]);
@@ -908,6 +1406,11 @@ async function watchBuild(buildId) {
       if (detail.status === "success" || detail.status === "failed") {
         appendOutput("buildLogsOut", `[status] ${detail.status}`);
         await loadBuilds();
+        if (detail.status === "success") {
+          state.imageRepoPage = 1;
+          await Promise.all([loadImageRepoImages(), loadAllImageRepoImagesForSelect()]);
+        }
+        closeBuildWatch();
       }
     } catch (_) {
       // ignore periodic detail failures
@@ -953,7 +1456,7 @@ function formatDeploymentDetailText(detail) {
     `应用: ${appName} (#${detail.app_id})`,
     `环境: ${envName} (#${detail.environment_id})`,
     `镜像 Digest: ${detail.image_digest || "-"}`,
-    `创建时间: ${detail.created_at}`,
+    `创建时间: ${formatDateTime(detail.created_at)}`,
     `日志文件: ${detail.log_file}`,
   ];
   if (detail.error_message) {
@@ -987,9 +1490,38 @@ function validateDeployConfigPayload(payload) {
     return "请选择部署模式";
   }
   if (!payload.build_id && !payload.image_ref) {
-    return "Build ID 和镜像引用至少填写一个";
+    return "请至少选择一个构建任务或镜像引用";
   }
   return null;
+}
+
+async function deleteImageFromRepo(imageRef, force = false, skipConfirm = false) {
+  if (!skipConfirm) {
+    const label = force ? `确认强制删除镜像 ${imageRef}？` : `确认删除镜像 ${imageRef}？`;
+    const ok = window.confirm(label);
+    if (!ok) return;
+  }
+
+  try {
+    await api("/api/image-repo/images/delete", {
+      method: "POST",
+      body: { image_ref: imageRef, force },
+    });
+    if (byId("imageDeployImageRefSelect").value === imageRef) {
+      setSelectedImageRef(null);
+    }
+    await Promise.all([loadImageRepoImages(), loadAllImageRepoImagesForSelect()]);
+    showToast(force ? "镜像已强制删除" : "镜像已删除");
+  } catch (error) {
+    if (!force) {
+      const retryForce = window.confirm(`删除失败：${error.message}\n是否强制删除？`);
+      if (retryForce) {
+        await deleteImageFromRepo(imageRef, true, true);
+        return;
+      }
+    }
+    showToast(`删除镜像失败: ${error.message}`, true);
+  }
 }
 
 async function deleteDeploymentConfig(configId) {
@@ -1135,6 +1667,32 @@ function bindNavigation() {
   });
 }
 
+function setBuildCenterMode(mode) {
+  const targetMode = mode === "ai" ? "ai" : "manual";
+  const buildView = byId("view-builds");
+  if (!buildView) return;
+  buildView.classList.toggle("build-mode-manual", targetMode === "manual");
+  buildView.classList.toggle("build-mode-ai", targetMode === "ai");
+  buildView.querySelectorAll(".build-ai-only").forEach((el) => {
+    el.hidden = targetMode !== "ai";
+  });
+  buildView.querySelectorAll(".build-manual-only").forEach((el) => {
+    el.hidden = targetMode !== "manual";
+  });
+  document.querySelectorAll(".build-tab-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.buildMode === targetMode);
+  });
+}
+
+function bindBuildTabs() {
+  document.querySelectorAll(".build-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setBuildCenterMode(btn.dataset.buildMode || "manual");
+    });
+  });
+  setBuildCenterMode("manual");
+}
+
 function bindForms() {
   byId("appForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1181,6 +1739,57 @@ function bindForms() {
     }
   });
 
+  byId("modelConfigForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+  });
+
+  byId("aiDockerfileForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.aiGenerating) {
+      showToast("AI 正在生成中，请稍候或点击停止", "warning");
+      return;
+    }
+    const modelConfigId = Number(byId("aiModelConfigSelect").value);
+    const requirement = byId("aiRequirementInput").value.trim();
+    if (!modelConfigId) {
+      showToast("请先选择模型配置", true);
+      return;
+    }
+    if (!requirement) {
+      showToast("请填写构建要求", true);
+      return;
+    }
+
+    const controller = new AbortController();
+    state.aiGenerateAbortController = controller;
+    setAiGenerating(true);
+    setOutput("aiDockerfileOut", "AI 正在生成 Dockerfile，请稍候...");
+    try {
+      const data = await api("/api/ai/generate-dockerfile", {
+        method: "POST",
+        body: {
+          model_config_id: modelConfigId,
+          requirement,
+        },
+        signal: controller.signal,
+      });
+      state.aiGeneratedDockerfile = data.dockerfile_content || "";
+      setOutput("aiDockerfileOut", state.aiGeneratedDockerfile || "(空结果)");
+      showToast(`Dockerfile 已生成（${data.provider}/${data.model_name}）`);
+    } catch (error) {
+      if (isAbortError(error)) {
+        setOutput("aiDockerfileOut", "已停止本次 AI 生成");
+        showToast("已停止 AI 生成", "warning");
+      } else {
+        setOutput("aiDockerfileOut", `生成失败: ${error.message}`);
+        showToast(`AI 生成失败: ${error.message}`, true);
+      }
+    } finally {
+      state.aiGenerateAbortController = null;
+      setAiGenerating(false);
+    }
+  });
+
   byId("buildForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const payload = getBuildPayloadFromForm();
@@ -1221,7 +1830,7 @@ function bindForms() {
     event.preventDefault();
     const payload = getImageDeployPayloadFromForm();
     if (!payload.image_ref) {
-      showToast("请先在镜像列表中选择镜像", true);
+      showToast("请先从镜像下拉中选择镜像", true);
       return;
     }
     if (!payload.app_id || !payload.environment_id) {
@@ -1256,12 +1865,111 @@ function bindActions() {
   });
   byId("refreshBuildsBtn").addEventListener("click", loadBuilds);
   byId("refreshBuildConfigsBtn").addEventListener("click", loadBuildConfigs);
+  byId("refreshModelConfigsBtn").addEventListener("click", loadModelConfigs);
   byId("refreshImageRepoBtn").addEventListener("click", async () => {
     state.imageRepoPage = 1;
-    await loadImageRepoImages();
+    await Promise.all([loadImageRepoImages(), loadAllImageRepoImagesForSelect()]);
   });
   byId("refreshDeployConfigsBtn").addEventListener("click", loadDeploymentConfigs);
   byId("refreshDeploysBtn").addEventListener("click", loadDeployments);
+  byId("closeDigestModalBtn").addEventListener("click", closeDigestModal);
+  byId("digestModalBackdrop").addEventListener("click", closeDigestModal);
+  byId("deployModeSelect").addEventListener("change", syncDeployOptionalPanels);
+  byId("imageDeployImageRefSelect").addEventListener("change", () => {
+    renderSelectedImageInfo();
+    renderImageRepoTable();
+  });
+  byId("modelProviderSelect").addEventListener("change", () => {
+    const hasSelectedConfig = Boolean(byId("modelConfigIdInput").value.trim());
+    applyModelProviderDefaults(!hasSelectedConfig);
+  });
+
+  byId("createModelConfigBtn").addEventListener("click", async () => {
+    const payload = getModelConfigPayloadFromForm();
+    if (!payload.name || !payload.base_url || !payload.model_name) {
+      showToast("请完整填写模型配置名称、Base URL、Model", true);
+      return;
+    }
+    try {
+      const config = await api("/api/model-configs", { method: "POST", body: payload });
+      await loadModelConfigs();
+      const current = state.modelConfigs.find((item) => item.id === config.id);
+      if (current) fillModelConfigForm(current);
+      showToast(`模型配置已保存 #${config.id}`);
+    } catch (error) {
+      showToast(`保存模型配置失败: ${error.message}`, true);
+    }
+  });
+
+  byId("updateModelConfigBtn").addEventListener("click", async () => {
+    const configId = Number(byId("modelConfigIdInput").value);
+    if (!configId) {
+      showToast("请先选择模型配置再更新", true);
+      return;
+    }
+    const payload = getModelConfigPayloadFromForm();
+    if (!payload.name || !payload.base_url || !payload.model_name) {
+      showToast("请完整填写模型配置名称、Base URL、Model", true);
+      return;
+    }
+
+    const body = {
+      name: payload.name,
+      provider: payload.provider,
+      base_url: payload.base_url,
+      model_name: payload.model_name,
+      temperature: payload.temperature,
+      max_tokens: payload.max_tokens,
+      is_default: payload.is_default,
+      clear_api_key: byId("clearModelApiKeyInput").checked,
+    };
+    if (payload.api_key) {
+      body.api_key = payload.api_key;
+    }
+
+    try {
+      const config = await api(`/api/model-configs/${configId}`, { method: "PUT", body });
+      await loadModelConfigs();
+      const current = state.modelConfigs.find((item) => item.id === config.id);
+      if (current) fillModelConfigForm(current);
+      showToast(`模型配置已更新 #${config.id}`);
+    } catch (error) {
+      showToast(`更新模型配置失败: ${error.message}`, true);
+    }
+  });
+
+  byId("testModelConfigBtn").addEventListener("click", async () => {
+    const configId = Number(byId("modelConfigIdInput").value || byId("aiModelConfigSelect").value);
+    await testModelConfig(configId);
+  });
+
+  byId("clearModelConfigSelectionBtn").addEventListener("click", () => {
+    byId("modelConfigForm").reset();
+    setSelectedModelConfigId(null);
+    byId("modelProviderSelect").value = "openai";
+    applyModelProviderDefaults(true);
+    renderModelConfigTable();
+    renderAiModelConfigSelect();
+    showToast("已清空模型配置选择");
+  });
+
+  byId("stopGenerateDockerfileBtn").addEventListener("click", () => {
+    if (state.aiGenerateAbortController) {
+      state.aiGenerateAbortController.abort();
+    } else {
+      showToast("当前没有正在执行的 AI 生成任务", "info");
+    }
+  });
+
+  byId("applyGeneratedDockerfileBtn").addEventListener("click", () => {
+    const content = (state.aiGeneratedDockerfile || byId("aiDockerfileOut").textContent || "").trim();
+    if (!content || content === "尚未生成" || content.startsWith("生成失败")) {
+      showToast("当前没有可回填的 Dockerfile 内容", true);
+      return;
+    }
+    byId("dockerfileInput").value = content;
+    showToast("已回填到构建表单的在线 Dockerfile");
+  });
 
   byId("imageRepoPageSizeSelect").addEventListener("change", async () => {
     const size = Number(byId("imageRepoPageSizeSelect").value);
@@ -1382,6 +2090,7 @@ function bindActions() {
   byId("clearBuildConfigSelectionBtn").addEventListener("click", () => {
     setSelectedBuildConfigId(null);
     byId("buildConfigNameInput").value = "";
+    syncBuildOptionalPanel();
     showToast("已清空配置选择");
   });
 
@@ -1589,12 +2298,22 @@ function bindActions() {
 
 async function bootstrap() {
   bindNavigation();
+  bindBuildTabs();
   bindForms();
   bindActions();
+  setAiGenerating(false);
+  byId("modelProviderSelect").value = "openai";
+  applyModelProviderDefaults(true);
+  syncBuildOptionalPanel();
+  syncDeployOptionalPanels();
+  renderSelectedImageInfo();
   await loadAll();
 }
 
 window.addEventListener("beforeunload", () => {
+  if (state.aiGenerateAbortController) {
+    state.aiGenerateAbortController.abort();
+  }
   closeBuildWatch();
   closeDeployWatch();
   closeImageRepoDeployWatch();

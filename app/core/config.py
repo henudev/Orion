@@ -9,7 +9,9 @@ from pathlib import Path
 class Settings:
     app_name: str = "Orion猎户座"
     api_prefix: str = "/api"
+    timezone_name: str = os.getenv("ORION_TIMEZONE", "Asia/Shanghai")
     max_concurrent_builds: int = int(os.getenv("MAX_CONCURRENT_BUILDS", "2"))
+    build_retry_limit: int = int(os.getenv("BUILD_RETRY_LIMIT", "2"))
     build_timeout_seconds: int = int(os.getenv("BUILD_TIMEOUT_SECONDS", "1800"))
     deploy_timeout_seconds: int = int(os.getenv("DEPLOY_TIMEOUT_SECONDS", "1800"))
 

@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.timezone import now_orion_naive
 from app.db.base import Base
 
 
@@ -28,10 +29,10 @@ class DeploymentConfig(Base):
     compose_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     remote_dir: Mapped[str | None] = mapped_column(String(512), nullable=True)
     timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_orion_naive, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=now_orion_naive,
+        onupdate=now_orion_naive,
         nullable=False,
     )
